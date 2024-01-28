@@ -29,7 +29,7 @@ const uint8_t UUID16_CHR_FALLDETECTION[] = {0x23, 0xD1, 0xBC, 0xEA, 0x5F, 0x78, 
 BLEService falldetectionService(UUID16_SVC_FALLDETECTION);
 BLECharacteristic falldetectionCharacteristic(UUID16_CHR_FALLDETECTION, BLERead | BLENotify, sizeof(uint16_t));
 
-const char* message = "Fall Detected!"; 
+char message[] = "Fall Detected"; 
 
 BLEDis bledis;    // DIS (Device Information Service) helper class instance
 BLEBas blebas;    // BAS (Battery Service) helper class instance
@@ -41,7 +41,7 @@ void setup() {
   // configure fall detection characteristic
   falldetectionCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
   falldetectionCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
-  falldetectionCharacteristic.setFixedLen(2);
+  falldetectionCharacteristic.setFixedLen(13);
   falldetectionCharacteristic.begin();
 
   // Start Bluetooth advertising
@@ -238,8 +238,9 @@ void loop() {
        abs(gyro.gyro.z) > fallGyroThreshold));
 
   if (falldetected==true) {
- Serial.println("Fall detected!");
- falldetectionCharacteristic.notify((uint8_t*)message, strlen(message));
- Serial.println("Sent fall detection data"); 
+ // Serial.println("Fall detected!");
+ falldetectionCharacteristic.notify(message, strlen(message));
+ // Serial.println("Sent fall detection data"); 
+ // Serial.println(strlen(message)); 
   }
 }
