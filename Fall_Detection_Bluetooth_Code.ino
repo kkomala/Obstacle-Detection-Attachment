@@ -34,6 +34,20 @@ char message[] = "Fall Detected";
 BLEDis bledis;    // DIS (Device Information Service) helper class instance
 BLEBas blebas;    // BAS (Battery Service) helper class instance
 
+// Define states for fall detection
+enum FallDetectionState {
+  SAMPLING,
+  POST_PEAK,
+  POST_FALL,
+  ACTIVITY_TEST
+};
+
+FallDetectionState currentState = SAMPLING;
+
+unsigned long peakDetectionTime;
+unsigned long postPeakStartTime;
+unsigned long postFallStartTime;
+
 void setup() {
   Bluefruit.begin();
   falldetectionService.begin();
@@ -227,20 +241,82 @@ void loop() {
   //Serial.println(" radians/s ");
   //Serial.println();
 
-  float fallAccelThreshold = 9.8;
-  float fallGyroThreshold = 20.0; 
+  // find magnitude of acceleration sensor
+float accelMagnitude = sqrt(accel.acceleration.x * accel.acceleration.x +
+                           accel.acceleration.y * accel.acceleration.y +
+                           accel.acceleration.z * accel.acceleration.z);
 
- bool falldetected =  (accel.acceleration.x > fallAccelThreshold ||
-      accel.acceleration.y > fallAccelThreshold ||
-      accel.acceleration.z > fallAccelThreshold &&
-      (abs(gyro.gyro.x) > fallGyroThreshold ||
-       abs(gyro.gyro.y) > fallGyroThreshold ||
-       abs(gyro.gyro.z) > fallGyroThreshold));
+// find magnitude of gyroscope sensor 
+float gyroMagnitude = sqrt(gyro.gyro.x * gyro.gyro.x +
+                          gyro.gyro.y * gyro.gyro.y +
+                          gyro.gyro.z * gyro.gyro.z);
 
-  if (falldetected==true) {
- // Serial.println("Fall detected!");
- falldetectionCharacteristic.notify(message, strlen(message));
- // Serial.println("Sent fall detection data"); 
- // Serial.println(strlen(message)); 
+float accelThreshold = 29.4; // threshold is 3g 
+bool accelerationMagnitude = (accelMagnitude >= accelThreshold);
+
+// Step 1: Instability in walking
+  if (accelerationMagnitude) {
+    Serial.println("Instability detected!");
+    // Proceed to the next step
+  }
+
+  // Step 2: Measuring Posture with Angle
+  float angle = (acos(accel.acceleration.x / accelMagnitude) * 180.0)/PI;
+  float angleThreshold =  45; // gyro threshold in degrees
+
+  bool angleChangeDetected = (angle >= angleThreshold);
+
+  if (angleChangeDetected) {
+    Serial.println("Posture change detected!");
+    // Proceed to the next step
+  }
+switch (currentState) {
+    case SAMPLING:
+      // Check if acceleration magnitude exceeds 3g and gyroscope magnitude exceeds 45 degrees
+      if (accelerationMagnitude >= 29.4 && angleChangeDetected >= 45.0) {
+        peakDetectionTime = millis();
+        currentState = POST_PEAK;
+      }
+      break;
+
+    case POST_PEAK:
+      // Check for bouncing timer (1000 ms)
+      if (millis() - peakDetectionTime > 1000) {
+        postPeakStartTime = millis();
+        currentState = POST_FALL;
+      } else if (accelerationMagnitude >= 29.4 && angleChangeDetected >= 45.0) {
+        // Return to Sampling state if another threshold peak is met within the bouncing interval
+        currentState = SAMPLING;
+      }
+      break;
+
+    case POST_FALL:
+      // Check for new threshold peak during post-fall interval
+      if (accelerationMagnitude <= 9.8 && angleChangeDetected < 45.0) {
+        // Actual fall detected
+        Serial.println("Fall detected!");
+        falldetectionCharacteristic.notify(message, strlen(message));
+        Serial.println("Sent fall detection data"); 
+      }
+       else if (millis() - postFallStartTime > 1500) {
+        currentState = ACTIVITY_TEST;
+      }
+      break;
+
+    case ACTIVITY_TEST:
+      // Check if acceleration magnitude exceeds 0.5g
+      if (accelerationMagnitude >= 4.9) {
+        // False alarm, go back to Sampling state
+        currentState = SAMPLING;
+      } else {
+        // Actual fall detected
+        Serial.println("Fall detected!");
+        falldetectionCharacteristic.notify(message, strlen(message));
+        Serial.println("Sent fall detection data"); 
+
+        // Return to Sampling state after fall detection
+        currentState = SAMPLING;
+      }
+      break;
   }
 }
