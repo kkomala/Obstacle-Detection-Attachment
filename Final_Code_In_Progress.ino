@@ -1,3 +1,4 @@
+#include <bluefruit.h>
 #include <Adafruit_LSM6DS3TRC.h>
 #include <Arduino.h>
 #include <Wire.h>
@@ -15,13 +16,23 @@
 #define LSM_MISO 12
 #define LSM_MOSI 11
 
-// TOF 
+// TOF + vibrational motor 
 #define DEV_I2C Wire
 #define SerialPort Serial
-#define motor 5
+#define NUM_MOTORS 3
+
+const int motorPins[NUM_MOTORS] = {5, 7, 9}; // Assuming pins 5, 7, and 9 are used for the motors
+
 
 Adafruit_LSM6DS3TRC lsm6ds3trc;
-VL53L4CX sensor_vl53l4cx_sat(&DEV_I2C, A1);
+
+VL53L4CX sensor_vl53l4cx_sat(&DEV_I2C, A0);    // TOF sensor 1 
+VL53L4CX sensor_vl53l4cx_sat_2(&DEV_I2C, A3);  // TOF sensor 2  
+VL53L4CX sensor_vl53l4cx_sat_3(&DEV_I2C, A5);  // TOF sensor 3
+
+#define XSHUT_PIN_1 A1  // Xshut pin for TOF sensor 1
+#define XSHUT_PIN_2 A3  // Xshut pin for TOF sensor 2
+#define XSHUT_PIN_3 A5  // Xshut pin for TOF sensor 3
 
 // Fall Detection service UUID
 const uint8_t UUID16_SVC_FALLDETECTION[] = {0x23, 0xD1, 0xBC, 0xEA, 0x5F, 0x78, 0x23, 0x15, 0xDE, 0xEF, 0x12, 0x12, 0x23, 0x16, 0x00, 0x00};
@@ -37,8 +48,71 @@ char message[] = "Fall Detected"; // for fall detection notifications
 BLEDis bledis; // DIS (Device Information Service) helper class instance
 BLEBas blebas; // BAS (Battery Service) helper class instance
 
+// Define states for fall detection
+enum FallDetectionState {
+  SAMPLING,
+  POST_PEAK,
+  POST_FALL,
+  ACTIVITY_TEST
+};
+
+FallDetectionState currentState = SAMPLING;
+
+unsigned long peakDetectionTime;
+unsigned long postPeakStartTime;
+unsigned long postFallStartTime;
+
 void setup(void) {
 
+// Define new I2C addresses for the sensors
+  uint8_t WantedAddress1 = 0x53;  // TOF sensor 1
+  uint8_t WantedAddress2 = 0x54;  // TOF sensor 2
+  uint8_t WantedAddress3 = 0x55;  // TOF sensor 3
+
+  // Set Xshut LOW
+  digitalWrite(XSHUT_PIN_1, LOW);
+  digitalWrite(XSHUT_PIN_2, LOW);
+  digitalWrite(XSHUT_PIN_3, LOW);
+  delay(10); 
+
+  // Raise the Xshut pin of sensor 1
+  digitalWrite(XSHUT_PIN_1, HIGH);
+  delay(10);
+
+  // Call VL53L4CX_SetDeviceAddress to set the new I2C address for sensor 1
+  sensor_vl53l4cx_sat.VL53L4CX_SetDeviceAddress(WantedAddress1);
+  delay(10);
+
+  // Power down sensor 1 by setting Xshut LOW
+  digitalWrite(XSHUT_PIN_1, LOW);
+  delay(10);
+
+  // Raise the Xshut pin of sensor 2
+  digitalWrite(XSHUT_PIN_2, HIGH);
+  delay(10);
+
+  // Call VL53LX_SetDeviceAddress to set the new I2C address for sensor 2
+  sensor_vl53l4cx_sat_2.VL53L4CX_SetDeviceAddress(WantedAddress2);
+  delay(10);
+
+  // Power down sensor 2 by setting Xshut LOW
+  digitalWrite(XSHUT_PIN_2, LOW);
+  delay(10);
+
+  // Raise the Xshut pin of sensor 3
+  digitalWrite(XSHUT_PIN_3, HIGH);
+  delay(10);
+
+  // Call VL53LX_SetDeviceAddress to set the new I2C address for sensor 2
+  sensor_vl53l4cx_sat_3.VL53L4CX_SetDeviceAddress(WantedAddress2);
+  delay(10);
+
+  // Power up sensors again
+  digitalWrite(XSHUT_PIN_1, HIGH);
+  digitalWrite(XSHUT_PIN_2, HIGH);
+  delay(10);
+
+  // Bluetooth
   Bluefruit.begin();
   falldetectionService.begin();
 
@@ -58,12 +132,23 @@ void setup(void) {
     delay(10); 
 
   DEV_I2C.begin();
+  // TOF 1
   sensor_vl53l4cx_sat.begin();
   sensor_vl53l4cx_sat.VL53L4CX_Off();
   sensor_vl53l4cx_sat.InitSensor(0x12);
-  
   sensor_vl53l4cx_sat.VL53L4CX_StartMeasurement();
-  pinMode(motor, OUTPUT);
+
+  // TOF 2
+  sensor_vl53l4cx_sat_2.begin();
+  sensor_vl53l4cx_sat_2.VL53L4CX_Off();
+  sensor_vl53l4cx_sat_2.InitSensor(0x12); // Use the appropriate address for sensor 2
+  sensor_vl53l4cx_sat_2.VL53L4CX_StartMeasurement();
+
+  // TOF 3  
+  sensor_vl53l4cx_sat_3.begin();
+  sensor_vl53l4cx_sat_3.VL53L4CX_Off();
+  sensor_vl53l4cx_sat_3.InitSensor(0x12); // Use the appropriate address for sensor 3
+  sensor_vl53l4cx_sat_3.VL53L4CX_StartMeasurement();
 
   Serial.println("Adafruit LSM6DS3TR-C test!");
 
@@ -153,9 +238,6 @@ void setup(void) {
     break;
   }
 
-
-
-
   Serial.print("Gyro data rate set to: ");
   switch (lsm6ds3trc.getGyroDataRate()) {
   case LSM6DS_RATE_SHUTDOWN:
@@ -214,23 +296,115 @@ void startAdv() {
 }
 
 void loop() {
+
+// TOF sensors -- constantly monitor for objects 
+  monitorTOFSensor(sensor_vl53l4cx_sat, motorPins[0]); // TOF 1 
+  monitorTOFSensor(sensor_vl53l4cx_sat_2, motorPins[1]); // TOF 2 
+  monitorTOFSensor(sensor_vl53l4cx_sat_3, motorPins[2]); // TOF 3
+
+// fall detection
+  sensors_event_t accel;
+  sensors_event_t gyro;
+  lsm6ds3trc.getEvent(&accel, &gyro, NULL);
+
+// find magnitude of acceleration sensor
+float accelMagnitude = sqrt(accel.acceleration.x * accel.acceleration.x +
+                           accel.acceleration.y * accel.acceleration.y +
+                           accel.acceleration.z * accel.acceleration.z);
+
+// find magnitude of gyroscope sensor 
+float gyroMagnitude = sqrt(gyro.gyro.x * gyro.gyro.x +
+                          gyro.gyro.y * gyro.gyro.y +
+                          gyro.gyro.z * gyro.gyro.z);
+
+float accelThreshold = 29.4; // threshold is 3g 
+bool accelerationMagnitude = (accelMagnitude >= accelThreshold);
+
+// Step 1: Instability in walking
+  if (accelerationMagnitude) {
+    Serial.println("Instability detected!");
+    // Proceed to the next step
+  }
+
+  // Step 2: Measuring Posture with Angle
+  float angle = (acos(accel.acceleration.x / accelMagnitude) * 180.0)/PI;
+  float angleThreshold =  45; // gyro threshold in degrees
+
+  bool angleChangeDetected = (angle >= angleThreshold);
+
+  if (angleChangeDetected) {
+    Serial.println("Posture change detected!");
+    // Proceed to the next step
+  }
+switch (currentState) {
+    case SAMPLING:
+      // Check if acceleration magnitude exceeds 3g and gyroscope magnitude exceeds 45 degrees
+      if (accelerationMagnitude >= 29.4 && angleChangeDetected >= 45.0) {
+        peakDetectionTime = millis();
+        currentState = POST_PEAK;
+      }
+      break;
+
+    case POST_PEAK:
+      // Check for bouncing timer (1000 ms)
+      if (millis() - peakDetectionTime > 1000) {
+        postPeakStartTime = millis();
+        currentState = POST_FALL;
+      } else if (accelerationMagnitude >= 29.4 && angleChangeDetected >= 45.0) {
+        // Return to Sampling state if another threshold peak is met within the bouncing interval
+        currentState = SAMPLING;
+      }
+      break;
+
+    case POST_FALL:
+      // Check for new threshold peak during post-fall interval
+      if (accelerationMagnitude <= 9.8 && angleChangeDetected < 45.0) {
+        // Actual fall detected
+        Serial.println("Fall detected!");
+        falldetectionCharacteristic.notify(message, strlen(message));
+        Serial.println("Sent fall detection data"); 
+      }
+       else if (millis() - postFallStartTime > 1500) {
+        currentState = ACTIVITY_TEST;
+      }
+      break;
+
+    case ACTIVITY_TEST:
+      // Check if acceleration magnitude exceeds 0.5g
+      if (accelerationMagnitude >= 4.9) {
+        // False alarm, go back to Sampling state
+        currentState = SAMPLING;
+      } else {
+        // Actual fall detected
+        Serial.println("Fall detected!");
+        falldetectionCharacteristic.notify(message, strlen(message));
+        Serial.println("Sent fall detection data"); 
+
+        // Return to Sampling state after fall detection
+        currentState = SAMPLING;
+      }
+      break;
+  }
+}
+
+void monitorTOFSensor(VL53L4CX& sensor, int motorPins) {
   VL53L4CX_MultiRangingData_t MultiRangingData;
   VL53L4CX_MultiRangingData_t *pMultiRangingData = &MultiRangingData;
   uint8_t NewDataReady = 0;
-  int no_of_object_found = 0, j;
+  int no_of_object_found = 0;
   char report[64];
   int status;
 
   do {
-    status = sensor_vl53l4cx_sat.VL53L4CX_GetMeasurementDataReady(&NewDataReady);
+    status = sensor.VL53L4CX_GetMeasurementDataReady(&NewDataReady);
   } while (!NewDataReady);
 
-    if ((!status) && (NewDataReady != 0)) {
-    status = sensor_vl53l4cx_sat.VL53L4CX_GetMultiRangingData(pMultiRangingData);
+  if ((!status) && (NewDataReady != 0)) {
+    status = sensor.VL53L4CX_GetMultiRangingData(pMultiRangingData);
     no_of_object_found = pMultiRangingData->NumberOfObjectsFound;
     snprintf(report, sizeof(report), "VL53L4CX Satellite: Count=%d, #Objs=%1d ", pMultiRangingData->StreamCount, no_of_object_found);
     SerialPort.print(report);
-    for (j = 0; j < no_of_object_found; j++) {
+    for (int j = 0; j < no_of_object_found; j++) {
       if (j != 0) {
         SerialPort.print("\r\n                               ");
       }
@@ -241,50 +415,26 @@ void loop() {
     }
     SerialPort.println("");
     if (status == 0) {
-      status = sensor_vl53l4cx_sat.VL53L4CX_ClearInterruptAndStartMeasurement();
+      status = sensor.VL53L4CX_ClearInterruptAndStartMeasurement();
     }
-  }
-  delay(500); 
 
-  sensors_event_t accel;
-  sensors_event_t gyro;
-  lsm6ds3trc.getEvent(&accel, &gyro, NULL);
+    if (no_of_object_found > 0) {
+      for (int j = 0; j < no_of_object_found; j++) {
+        int distance = pMultiRangingData->RangeData[j].RangeMilliMeter;
 
-  float fallAccelThreshold = 9.8;
-  float fallGyroThreshold = 20.0; 
-
- bool falldetected =  (accel.acceleration.x > fallAccelThreshold ||
-      accel.acceleration.y > fallAccelThreshold ||
-      accel.acceleration.z > fallAccelThreshold &&
-      (abs(gyro.gyro.x) > fallGyroThreshold ||
-       abs(gyro.gyro.y) > fallGyroThreshold ||
-       abs(gyro.gyro.z) > fallGyroThreshold)); 
-
-  if (falldetected==true) {
- Serial.println("Fall detected!");
-falldetectionCharacteristic.notify(message, strlen(message));
- Serial.println("Sent fall detection data"); 
- Serial.println(strlen(message));
-  }
- 
-if (no_of_object_found > 0) {
-    for(int j =0; j< no_of_object_found; j++){
-         int distance = pMultiRangingData->RangeData[j].RangeMilliMeter;
-
-// if object distance is less than 100
-    if (distance <= 100) {
-      tone(motor, 1000); 
-
-// if object distance is less than 200 
-    } else if (distance <= 200 & distance > 100) {
-      tone(motor, 100); 
-
-// if object distance is less than 500 
-    } else if (distance <= 500 & distance > 200) {
-      tone(motor, 50); 
-
-// no object detected 
+        // Adjust motor intensity based on distance
+        if (distance <= 100) {
+          analogWrite(motorPins, 255); // Full intensity
+        } else if (distance <= 200 && distance > 100) {
+          analogWrite(motorPins, 150); // Medium intensity
+        } else if (distance <= 500 && distance > 200) {
+          analogWrite(motorPins, 75); // Low intensity
+        } else {
+          analogWrite(motorPins, 0); // Turn off motor
+        }
+      }
     } else {
-      noTone(motor); 
+      analogWrite(motorPins, 0); // Turn off motor if no objects detected
     }
-    }
+  }
+}
