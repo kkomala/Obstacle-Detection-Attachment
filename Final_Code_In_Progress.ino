@@ -40,8 +40,16 @@ const uint8_t UUID16_SVC_FALLDETECTION[] = {0x23, 0xD1, 0xBC, 0xEA, 0x5F, 0x78, 
 // Fall Detection characteristic UUID
 const uint8_t UUID16_CHR_FALLDETECTION[] = {0x23, 0xD1, 0xBC, 0xEA, 0x5F, 0x78, 0x23, 0x15, 0xDE, 0xEF, 0x12, 0x12, 0x24, 0x16, 0x00, 0x00};
 
+// Battery service UUID 
+const uint8_t CUSTOM_SVC_BATTERY[] = {0x8F, 0xAB, 0x3C, 0xE4, 0x7D, 0x6A, 0x2F, 0x81, 0xC2, 0x5E, 0xF9, 0x0A, 0x1B, 0xD8, 0x4E, 0x00};
+
+// Battery characteristic UUID 
+const uint8_t UUID16_CHR_BATTERY[] = {0x9A, 0x2C, 0x5F, 0x81, 0x3B, 0x6E, 0x4D, 0xAF, 0x8C, 0xE7, 0x1A, 0x5B, 0xF2, 0xD9, 0x7E, 0x3F}; 
+
 BLEService falldetectionService(UUID16_SVC_FALLDETECTION);
 BLECharacteristic falldetectionCharacteristic(UUID16_CHR_FALLDETECTION, BLERead | BLENotify, sizeof(uint16_t));
+BLEService batteryService(CUSTOM_SVC_BATTERY);
+BLECharacteristic batteryCharacteristic(UUID16_CHR_BATTERY, BLERead | BLENotify, 4);
 
 char message[] = "Fall Detected"; // for fall detection notifications 
 
@@ -61,6 +69,9 @@ FallDetectionState currentState = SAMPLING;
 unsigned long peakDetectionTime;
 unsigned long postPeakStartTime;
 unsigned long postFallStartTime;
+
+// battery 
+#define batteryPin A6 // D10
 
 void setup(void) {
 
@@ -115,15 +126,23 @@ void setup(void) {
   // Bluetooth
   Bluefruit.begin();
   falldetectionService.begin();
-
+  batteryService.begin();
+  
   // Configure fall detection characteristic
   falldetectionCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
   falldetectionCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   falldetectionCharacteristic.setFixedLen(13); // 13 bytes of data sent ("message")
   falldetectionCharacteristic.begin();
 
+  // Configure battery characteristic 
+  batteryCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  batteryCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  batteryCharacteristic.setFixedLen(4); // 4 bytes of data sent --> double check 
+  batteryCharacteristic.begin();
+
   // Start Bluetooth advertising
   Bluefruit.Advertising.addService(falldetectionService);
+  Bluefruit.Advertising.addService(batteryService);
   Bluefruit.Advertising.start(0); // 0 means it will advertise forever
   startAdv();
 
@@ -284,6 +303,7 @@ void startAdv() {
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
   Bluefruit.Advertising.addService(falldetectionService);
+  Bluefruit.Advertising.addService(batteryService);
 
   // Secondary Scan Response packet (optional)
   Bluefruit.ScanResponse.addName();
@@ -437,4 +457,23 @@ void monitorTOFSensor(VL53L4CX& sensor, int motorPins) {
       analogWrite(motorPins, 0); // Turn off motor if no objects detected
     }
   }
+  // Read the analog voltage
+  int rawValue = analogRead(batteryPin);
+
+  // Convert the raw value to voltage (assuming 3.3V reference voltage)
+  float voltage = rawValue * (3.3 / 1023.0);
+
+  // Convert voltage to string
+  String voltageString = String(voltage, 2); // 2 decimal places
+
+  // Print the battery voltage
+  Serial.print("Battery Voltage: ");
+  Serial.print(voltage);
+  Serial.println(" V");
+
+  // send battery voltage 
+  batteryCharacteristic.notify((uint8_t*)voltageString.c_str(), voltageString.length());
+
+  // Delay before the next reading
+  delay(1000);
 }
