@@ -405,6 +405,25 @@ switch (currentState) {
       }
       break;
   }
+  // Read the analog voltage
+  int rawValue = analogRead(batteryPin);
+
+  // Convert the raw value to voltage (assuming 3.3V reference voltage)
+  float voltage = rawValue * (3.3 / 1023.0);
+
+  // Convert voltage to string
+  String voltageString = String(voltage, 2); // 2 decimal places
+
+  // Print the battery voltage
+  Serial.print("Battery Voltage: ");
+  Serial.print(voltage);
+  Serial.println(" V");
+
+  // send battery voltage 
+  batteryCharacteristic.notify((uint8_t*)voltageString.c_str(), voltageString.length());
+
+  // Delay before the next reading
+  delay(1000);
 }
 
 void monitorTOFSensor(VL53L4CX& sensor, int motorPins) {
@@ -457,23 +476,4 @@ void monitorTOFSensor(VL53L4CX& sensor, int motorPins) {
       analogWrite(motorPins, 0); // Turn off motor if no objects detected
     }
   }
-  // Read the analog voltage
-  int rawValue = analogRead(batteryPin);
-
-  // Convert the raw value to voltage (assuming 3.3V reference voltage)
-  float voltage = rawValue * (3.3 / 1023.0);
-
-  // Convert voltage to string
-  String voltageString = String(voltage, 2); // 2 decimal places
-
-  // Print the battery voltage
-  Serial.print("Battery Voltage: ");
-  Serial.print(voltage);
-  Serial.println(" V");
-
-  // send battery voltage 
-  batteryCharacteristic.notify((uint8_t*)voltageString.c_str(), voltageString.length());
-
-  // Delay before the next reading
-  delay(1000);
 }
