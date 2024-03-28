@@ -74,7 +74,7 @@ void detectStairs(VL53L4CX& sensor) {
 
     if (numMeasurements > 0) {
     float averageDistance = sumDistances / numMeasurements;
-    float range = 5.0; // Range of +/- 5 mm
+    float range = 50.0; // Range of +/- 50 mm
 
     // Determine stair direction based on average distance and range
     float upperThreshold = averageDistance + range; // for ascending stairs
@@ -93,15 +93,15 @@ void detectStairs(VL53L4CX& sensor) {
 
     // Check if average distance falls within the range
     if (currentDistance > upperThreshold) {
-      Serial.println("Stairs going up");
-      analogWrite(motorPins, 150); // Medium intensity
+      Serial.println("Stairs going up!");
+      analogWrite(motorPins, 150); // Medium intensity but change to pattern
     } else if (currentDistance < lowerThreshold) {
-      Serial.println("Stairs going down");
-      analogWrite(motorPins, 255); // Full intensity
+      Serial.println("Stairs going down!");
+      analogWrite(motorPins, 255); // Full intensity but change to pattern 
     } else {
-      Serial.println("No stairs detected");
+      Serial.println("No stairs detected!");
     }
   } else {
-    Serial.println("No valid measurements obtained");
+    Serial.println("No valid measurements obtained!");
   }
 }
